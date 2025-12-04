@@ -453,6 +453,11 @@ const StyledWrapper = styled.div`
     white-space: pre-wrap;
     word-break: break-word;
     flex: 1;
+
+    .log-link {
+      text-decoration: underline;
+      word-break: break-all;
+    }
     
     .log-object {
       margin: 4px 0;

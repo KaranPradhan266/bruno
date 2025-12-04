@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import ReactJson from 'react-json-view';
 import { useTheme } from 'providers/Theme';
@@ -33,9 +33,147 @@ import ErrorDetailsPanel from './ErrorDetailsPanel';
 import Performance from '../Performance';
 import StyledWrapper from './StyledWrapper';
 
+const URL_REGEX_PATTERN = '((https?:\\/\\/|www\\.)[^\\s]+)';
+const TRAILING_PUNCTUATION_REGEX = /[)\]}!.,;:?'"`]/;
+
+const createUrlRegex = () => new RegExp(URL_REGEX_PATTERN, 'gi');
+
+const getBracketAllowance = (text) => {
+  let openParen = 0;
+  let closeParen = 0;
+  let openBracket = 0;
+  let closeBracket = 0;
+  let openBrace = 0;
+  let closeBrace = 0;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (char === '(') openParen += 1;
+    if (char === ')') closeParen += 1;
+    if (char === '[') openBracket += 1;
+    if (char === ']') closeBracket += 1;
+    if (char === '{') openBrace += 1;
+    if (char === '}') closeBrace += 1;
+  }
+
+  return {
+    ')': Math.max(0, closeParen - openParen),
+    ']': Math.max(0, closeBracket - openBracket),
+    '}': Math.max(0, closeBrace - openBrace)
+  };
+};
+
+const trimTrailingPunctuation = (url) => {
+  let end = url.length;
+  const allowance = getBracketAllowance(url);
+
+  while (end > 0 && TRAILING_PUNCTUATION_REGEX.test(url[end - 1])) {
+    const last = url[end - 1];
+
+    if ((last === ')' || last === ']' || last === '}') && allowance[last] <= 0) break;
+
+    if (allowance[last] !== undefined) {
+      allowance[last] -= 1;
+    }
+
+    end -= 1;
+  }
+
+  return {
+    trimmedUrl: url.slice(0, end),
+    trailing: url.slice(end)
+  };
+};
+
+const linkifyText = (text, keyPrefix) => {
+  const parts = [];
+  const urlRegex = createUrlRegex();
+  let match;
+  let lastIndex = 0;
+  let matchIndex = 0;
+
+  while ((match = urlRegex.exec(text)) !== null) {
+    const [matchedUrl] = match;
+    const start = match.index;
+
+    if (start > lastIndex) {
+      parts.push(<React.Fragment key={`${keyPrefix}-text-${matchIndex}`}>{text.slice(lastIndex, start)}</React.Fragment>);
+    }
+
+    const { trimmedUrl, trailing } = trimTrailingPunctuation(matchedUrl);
+    const href = trimmedUrl.startsWith('http') ? trimmedUrl : `http://${trimmedUrl}`;
+
+    parts.push(<a key={`${keyPrefix}-link-${matchIndex}`} href={href} target="_blank" rel="noreferrer noopener" className="log-link">{trimmedUrl}</a>);
+
+    if (trailing) {
+      parts.push(<React.Fragment key={`${keyPrefix}-trail-${matchIndex}`}>{trailing}</React.Fragment>);
+    }
+
+    lastIndex = start + matchedUrl.length;
+    matchIndex += 1;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(<React.Fragment key={`${keyPrefix}-text-final`}>{text.slice(lastIndex)}</React.Fragment>);
+  }
+
+  return parts;
+};
+
+const renderMessage = (content) => {
+  const parts = Array.isArray(content) ? content : [content];
+
+  return parts.map((part, index) => {
+    const keyPrefix = `msg-${index}`;
+
+    const renderedPart
+      = typeof part === 'string'
+        ? linkifyText(part, keyPrefix)
+        : part;
+
+    return (
+      <React.Fragment key={keyPrefix}>
+        {renderedPart}
+        {index < parts.length - 1 ? ' ' : null}
+      </React.Fragment>
+    );
+  });
+};
+
+const formatMessage = (msg, originalArgs, displayedTheme) => {
+  if (originalArgs && originalArgs.length > 0) {
+    return originalArgs.map((arg, index) => {
+      if (typeof arg === 'object' && arg !== null) {
+        return (
+          <div key={index} className="log-object">
+            <ReactJson
+              src={arg}
+              theme={displayedTheme === 'light' ? 'rjv-default' : 'monokai'}
+              iconStyle="triangle"
+              indentWidth={2}
+              collapsed={1}
+              displayDataTypes={false}
+              displayObjectSize={false}
+              enableClipboard={false}
+              name={false}
+              style={{
+                backgroundColor: 'transparent',
+                fontSize: '${(props) => props.theme.font.size.sm}',
+                fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace'
+              }}
+            />
+          </div>
+        );
+      }
+      return String(arg);
+    });
+  }
+  return msg;
+};
+
 const LogIcon = ({ type }) => {
   const iconProps = { size: 16, strokeWidth: 1.5 };
-  
+
   switch (type) {
     case 'error':
       return <IconAlertCircle className="log-icon error" {...iconProps} />;
@@ -65,45 +203,15 @@ const LogTimestamp = ({ timestamp }) => {
 
 const LogMessage = ({ message, args }) => {
   const { displayedTheme } = useTheme();
-  
-  const formatMessage = (msg, originalArgs) => {
-    if (originalArgs && originalArgs.length > 0) {
-      return originalArgs.map((arg, index) => {
-        if (typeof arg === 'object' && arg !== null) {
-          return (
-            <div key={index} className="log-object">
-              <ReactJson
-                src={arg}
-                theme={displayedTheme === 'light' ? 'rjv-default' : 'monokai'}
-                iconStyle="triangle"
-                indentWidth={2}
-                collapsed={1}
-                displayDataTypes={false}
-                displayObjectSize={false}
-                enableClipboard={false}
-                name={false}
-                style={{
-                  backgroundColor: 'transparent',
-                  fontSize: '${(props) => props.theme.font.size.sm}',
-                  fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace'
-                }}
-              />
-            </div>
-          );
-        }
-        return String(arg);
-      });
-    }
-    return msg;
-  };
 
-  const formattedMessage = formatMessage(message, args);
-  
+  const formattedMessage = useMemo(() => formatMessage(message, args, displayedTheme),
+    [message, args, displayedTheme]);
+  const renderedMessage = useMemo(() => renderMessage(formattedMessage),
+    [formattedMessage]);
+
   return (
     <span className="log-message">
-      {Array.isArray(formattedMessage) ? formattedMessage.map((item, index) => (
-        <span key={index}>{item} </span>
-      )) : formattedMessage}
+      {renderedMessage}
     </span>
   );
 };
@@ -541,4 +649,4 @@ const Console = () => {
   );
 };
 
-export default Console; 
+export default Console;
